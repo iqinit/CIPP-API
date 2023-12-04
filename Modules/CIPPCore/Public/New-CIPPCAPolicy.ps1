@@ -33,43 +33,50 @@ function New-CIPPCAPolicy {
             }
         }
     }
-
     $displayname = ($RawJSON | ConvertFrom-Json).Displayname
 
     $JSONObj = $RawJSON | ConvertFrom-Json | Select-Object * -ExcludeProperty ID, GUID, *time*
     Remove-EmptyArrays $JSONObj
     #Remove context as it does not belong in the payload.
-    $JsonObj.grantControls.PSObject.Properties.Remove('authenticationStrength@odata.context')
-    if ($JSONObj.conditions.users.excludeGuestsOrExternalUsers.externalTenants.Members) {
-        $JsonObj.conditions.users.excludeGuestsOrExternalUsers.externalTenants.PSObject.Properties.Remove('@odata.context')
+    try {
+        $JsonObj.grantControls.PSObject.Properties.Remove('authenticationStrength@odata.context')
+        if ($JSONObj.conditions.users.excludeGuestsOrExternalUsers.externalTenants.Members) {
+            $JsonObj.conditions.users.excludeGuestsOrExternalUsers.externalTenants.PSObject.Properties.Remove('@odata.context')
+        }
+        if ($State -and $State -ne 'donotchange') {
+            $Jsonobj.state = $State
+        }
     }
-    if ($State -and $State -ne 'donotchange') {
-        $Jsonobj.state = $State
+    catch {
+        # no issues here.
     }
 
     #for each of the locations, check if they exist, if not create them. These are in $jsonobj.LocationInfo
-    $LocationLookupTable = foreach ($location in $jsonobj.LocationInfo) {
-        if (!$location.displayName) { continue }
-        $CheckExististing = New-GraphGETRequest -uri "https://graph.microsoft.com/beta/identity/conditionalAccess/namedLocations" -tenantid $TenantFilter
-        if ($Location.displayName -in $CheckExististing.displayName) {
-            [pscustomobject]@{
-                id   = ($CheckExististing | Where-Object -Property displayName -EQ $Location.displayName).id
-                name = ($CheckExististing | Where-Object -Property displayName -EQ $Location.displayName).displayName
-            }
-            Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Matched a CA policy with the existing Named Location: $($location.displayName)" -Sev "Info"
+    $LocationLookupTable = foreach ($locations in $jsonobj.LocationInfo) {
+        foreach ($location in $locations) {
+            if (!$location.displayName) { continue }
+            $CheckExististing = New-GraphGETRequest -uri "https://graph.microsoft.com/beta/identity/conditionalAccess/namedLocations" -tenantid $TenantFilter
+            if ($Location.displayName -in $CheckExististing.displayName) {
+                [pscustomobject]@{
+                    id   = ($CheckExististing | Where-Object -Property displayName -EQ $Location.displayName).id
+                    name = ($CheckExististing | Where-Object -Property displayName -EQ $Location.displayName).displayName
+                }
+                Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Matched a CA policy with the existing Named Location: $($location.displayName)" -Sev "Info"
  
-        }
-        else {
-            $Body = ConvertTo-Json -InputObject $Location
-            $GraphRequest = New-GraphPOSTRequest -uri "https://graph.microsoft.com/beta/identity/conditionalAccess/namedLocations" -body $body -Type POST -tenantid $tenantfilter
-            Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Created new Named Location: $($location.displayName)" -Sev "Info"
-            [pscustomobject]@{
-                id   = $GraphRequest.id
-                name = $GraphRequest.displayName
+            }
+            else {
+                $Body = ConvertTo-Json -InputObject $Location
+                $GraphRequest = New-GraphPOSTRequest -uri "https://graph.microsoft.com/beta/identity/conditionalAccess/namedLocations" -body $body -Type POST -tenantid $tenantfilter
+                Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Created new Named Location: $($location.displayName)" -Sev "Info"
+                [pscustomobject]@{
+                    id   = $GraphRequest.id
+                    name = $GraphRequest.displayName
+                }
             }
         }
     }
-    Write-Host ($LocationLookupTable | ConvertTo-Json)
+    Write-Host "here5"
+
     foreach ($location in $JSONObj.conditions.locations.includeLocations) {
         Write-Host "Replacting $location"
         $lookup = $LocationLookupTable | Where-Object -Property name -EQ $location
@@ -112,7 +119,7 @@ function New-CIPPCAPolicy {
         }
     }
     catch {
-        throw $_
-        Write-LogMessage -API "Standards" -tenant $tenant -message  "Failed to create or update conditional access rule $($JSONObj.displayName): $($_.exception.message)" -sev "Error"
+        throw "Failed to create or update conditional access rule $($JSONObj.displayName): $($_.exception.message)"
+        Write-LogMessage -API "Standards" -tenant $tenant -message  "Failed to create or update conditional access rule $($JSONObj.displayName): $($_.exception.message) " -sev "Error"
     }
 }
